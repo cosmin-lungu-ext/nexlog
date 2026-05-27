@@ -1,0 +1,13 @@
+[HLOG]
+version=1.0
+equipment_id=CAT_797F
+date=2024-01-15
+encoding=text
+
+# Timestamp(ms) | PGN      | SA   | DA   | Len | Data
+1000             | 0xFEEF   | 0x00 | 0xFF | 8   | 3C 00 FF FF FF FF FF FF
+1010             | 0xFEF1   | 0x00 | 0xFF | 8   | F0 2B 00 00 FF FF FF FF
+1020             | 0xFECA   | 0x03 | 0xFF | 8   | FF FF 00 00 FF FF 00 FF
+1030             | 0xFEE5   | 0x00 | 0xFF | 8   | 40 1F 00 00 FF FF FF FF
+1040             | 0xFEEF   | 0x00 | 0xFF | 8   | 41 00 FF FF FF FF FF FF
+1050             | 0xFEF1   | 0x00 | 0xFF | 8   | D0 2C 00 00 FF FF FF FF
