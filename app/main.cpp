@@ -1,52 +1,112 @@
 #include <iostream>
+#include <string>
+#include <memory>
 #include "common/message.hpp"
 #include "common/signal_decoder.hpp"
+#include "parser/parser_factory.hpp"
+#include "analyzer/anomaly_detector.hpp"
+#include "analyzer/alert_manager.hpp"
+#include "streamer/udp_sender.hpp"
+
+void print_usage() {
+    std::cout << "Usage: nexlog <logfile> [--stream <host> <port>]" << std::endl;
+    std::cout << "  logfile:  path to .asc or .hlog file" << std::endl;
+    std::cout << "  --stream: optional UDP streaming to server" << std::endl;
+    std::cout << "Example: nexlog data/sample.asc" << std::endl;
+    std::cout << "Example: nexlog data/sample.asc --stream 127.0.0.1 9000" << std::endl;
+}
 
 int main(int argc, char* argv[]) {
-    std::cout << "nexlog starting..." << std::endl;
-    std::cout << "------------------------" << std::endl;
+    std::cout << "╔══════════════════════════════╗" << std::endl;
+    std::cout << "║   nexlog diagnostic tool     ║" << std::endl;
+    std::cout << "║   CAN/J1939 log analyzer     ║" << std::endl;
+    std::cout << "╚══════════════════════════════╝" << std::endl;
 
-    // Test 1 — Engine Oil Pressure
-    nexlog::J1939Message pressure_msg;
-    pressure_msg.timestamp_ms   = 1000;
-    pressure_msg.pgn            = nexlog::PGN::ENGINE_FLUID_PRESSURE;
-    pressure_msg.source_address = nexlog::SA::ENGINE;
-    pressure_msg.length         = 8;
-    pressure_msg.data           = {0xFF, 0xFF, 0xFF, 0x3C, 0xFF, 0xFF, 0xFF, 0xFF};
-
-    std::cout << pressure_msg.to_string() << std::endl;
-    auto decoded = nexlog::SignalDecoder::decode(pressure_msg);
-    if (decoded.has_value()) {
-        std::cout << decoded->to_string() << std::endl;
+    if (argc < 2) {
+        print_usage();
+        return 1;
     }
 
-    std::cout << "------------------------" << std::endl;
+    std::string filepath = argv[1];
 
-    // Test 2 — Vehicle Speed
-    nexlog::J1939Message speed_msg;
-    speed_msg.timestamp_ms   = 2000;
-    speed_msg.pgn            = nexlog::PGN::VEHICLE_SPEED;
-    speed_msg.source_address = nexlog::SA::ENGINE;
-    speed_msg.length         = 8;
-    speed_msg.data           = {0xF0, 0x2B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    // Optional streaming
+    bool streaming = false;
+    std::string stream_host;
+    uint16_t stream_port = 0;
 
-    std::cout << speed_msg.to_string() << std::endl;
-    auto decoded2 = nexlog::SignalDecoder::decode(speed_msg);
-    if (decoded2.has_value()) {
-        std::cout << decoded2->to_string() << std::endl;
+    if (argc >= 5 && std::string(argv[2]) == "--stream") {
+        stream_host = argv[3];
+        stream_port = static_cast<uint16_t>(std::stoi(argv[4]));
+        streaming   = true;
     }
 
-    std::cout << "------------------------" << std::endl;
-
-    // Test 3 — Unsupported PGN
-    nexlog::J1939Message unknown_msg;
-    unknown_msg.pgn    = 0x1234;
-    unknown_msg.length = 8;
-
-    auto decoded3 = nexlog::SignalDecoder::decode(unknown_msg);
-    if (!decoded3.has_value()) {
-        std::cout << "PGN 0x1234: not supported" << std::endl;
+    // Create parser via factory
+    auto parser = nexlog::ParserFactory::create(filepath);
+    if (!parser) {
+        std::cerr << "Failed to create parser for: " << filepath << std::endl;
+        return 1;
     }
+
+    if (!parser->open(filepath)) {
+        std::cerr << "Failed to open file: " << filepath << std::endl;
+        return 1;
+    }
+
+    // Setup anomaly detector and alert manager
+    nexlog::AnomalyDetector detector;
+    nexlog::AlertManager    alert_manager;
+
+    // Register alert callback — lambda function
+    alert_manager.register_callback([](const nexlog::Anomaly& anomaly) {
+        std::cout << "  ⚠ " << anomaly.to_string() << std::endl;
+    });
+
+    // Setup UDP streamer if requested
+    nexlog::UDPSender sender;
+    if (streaming) {
+        if (!sender.init(stream_host, stream_port)) {
+            std::cerr << "Failed to init UDP streamer" << std::endl;
+            return 1;
+        }
+    }
+
+    std::cout << "\nParsing: " << filepath << std::endl;
+    std::cout << std::string(50, '-') << std::endl;
+
+    // Main processing loop
+    while (parser->has_next()) {
+        nexlog::J1939Message msg = parser->next();
+
+        // Print message
+        std::cout << msg.to_string() << std::endl;
+
+        // Decode signal
+        auto decoded = nexlog::SignalDecoder::decode(msg);
+        if (decoded.has_value() && decoded->valid) {
+            std::cout << "  → " << decoded->to_string() << std::endl;
+        }
+
+        // Detect anomalies
+        auto anomalies = detector.analyse(msg);
+        alert_manager.process(anomalies);
+
+        // Stream via UDP if enabled
+        if (streaming && sender.is_connected()) {
+            nexlog::DiagPacket packet;
+            packet.timestamp_ms = msg.timestamp_ms;
+            packet.pgn          = msg.pgn;
+            packet.source_addr  = msg.source_address;
+            packet.dest_addr    = msg.dest_address;
+            packet.length       = msg.length;
+            std::memcpy(packet.data, msg.data.data(), msg.length);
+            packet.checksum     = packet.calculate_checksum();
+            sender.send(packet);
+        }
+    }
+
+    std::cout << std::string(50, '-') << std::endl;
+    std::cout << "Total messages: " << parser->message_count() << std::endl;
+    std::cout << "Total alerts:   " << alert_manager.alert_count() << std::endl;
 
     return 0;
 }
